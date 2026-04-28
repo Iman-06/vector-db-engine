@@ -1,14 +1,19 @@
-# Makefile — Vector DB Engine (Phase 1)
-#
+# Makefile — Vector DB Engine
+
 # USAGE:
 #   make          build the server binary: ./vdb
 #   make clean    remove all build artefacts
-#
+
+
+
+
 # WHEN MEMBER 3 DELIVERS search.c:
 #   Replace search_stub.c with search.c in SERVER_SRCS below.
 #
 # WHEN MEMBER 3 DELIVERS vdb_cli.c:
 #   Uncomment the vdb-cli rules at the bottom.
+
+
 
 CC      = gcc
 
@@ -20,8 +25,7 @@ CFLAGS  = -std=gnu11 -Wall -Wextra -pthread -g
 
 LDFLAGS = -pthread
 
-# ── Server sources ────────────────────────────────────────────────────
-# To switch from stub to real search: replace search_stub.c with search.c
+#  Server sources
 SERVER_SRCS = server.c        \
               command.c       \
               vector_store.c  \
@@ -29,7 +33,7 @@ SERVER_SRCS = server.c        \
 
 SERVER_OBJS = $(SERVER_SRCS:.c=.o)
 
-# ── Targets ───────────────────────────────────────────────────────────
+#Targets
 .PHONY: all clean
 
 all: vdb
@@ -43,7 +47,7 @@ vdb: $(SERVER_OBJS)
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-# ── Explicit header dependencies ─────────────────────────────────────
+# Explicit header dependencies 
 # Tell make when to recompile an object if a header changes.
 server.o:        server.c        vdb_interface.h command.h vector_store.h
 command.o:       command.c       vdb_interface.h command.h vector_store.h
@@ -55,7 +59,7 @@ search_stub.o:   search_stub.c   vdb_interface.h vector_store.h
 # vdb-cli: $(CLI_SRCS)
 # 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^
 
-# ── Clean ─────────────────────────────────────────────────────────────
+# Clean 
 clean:
 	rm -f $(SERVER_OBJS) vdb vdb-cli
 	@echo "Cleaned."
