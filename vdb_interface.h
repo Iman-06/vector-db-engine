@@ -22,21 +22,14 @@ enum class search_mode_t {
     SEARCH_MODE_ANN   = 1
 };
 
-/* ──────────────────────────────────────────────────────────────────────
- * search_result_t — one entry returned by any search function.
- *
- * store_index: the slot number inside vs->vectors / vs->ids where this
- *   vector lives. Member 3 MUST fill this field so Member 1 can retrieve
- *   the original float components for the response line without doing a
- *   slow ID scan.
- * ────────────────────────────────────────────────────────────────────── */
+ // search_result_t: one entry returned by any search function.
 struct search_result_t {
     int64_t id = 0;           
     double distance = 0.0;    
     size_t store_index = 0;
 };
 
-// server_config_t — runtime settings parsed from command-line arguments.
+// server_config_t: runtime settings parsed from command-line arguments.
 struct server_config_t {
     int dim = 0;                 
     int port = 0;                
