@@ -37,8 +37,10 @@ static void read_response(FILE* in)
     while (fgets(line, sizeof(line), in)) {
         cout << line;
         if (line[0] == '(') break;
-        if (strncmp(line, "OK", 2) == 0) break; 
+        if (strncmp(line, "OK", 2) == 0) break;
+        if (strncmp(line, "ERR", 3) == 0) break;
         if (strncmp(line, "ERROR", 5) == 0) break;
+        if (strncmp(line, "BYE", 3) == 0) break;
     }
 }
 int main(int argc, char* argv[])
@@ -62,6 +64,13 @@ int main(int argc, char* argv[])
         return 1;
     }
     setbuf(out, nullptr); //this disables buffering so that cmnds r sent instantly
+    timeval timeout{};
+    timeout.tv_sec = 5;
+    timeout.tv_usec = 0;
+    if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0) {
+        perror("setsockopt SO_RCVTIMEO");
+    }
+
     string input;
     while (true) {
         cout << "> ";
