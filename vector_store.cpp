@@ -1,5 +1,5 @@
 //cpp file for implementation
-#include "vector_store.hpp"
+#include "vector_store.h"
 #include <cstdlib>
 #include <cstring>
 #include <cstdio>

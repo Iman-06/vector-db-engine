@@ -138,7 +138,7 @@ static void cmd_search(int fd, const server_config_t *cfg, string rest)
     }
     search_mode_t mode;
     if (tok == "BRUTE") {
-        mode = SEARCH_MODE_BRUTE;
+        mode = search_mode_t::SEARCH_MODE_BRUTE;
     } else {
         send_fmt(fd, "ERR SEARCH: unknown mode '%s' (Phase 1 supports BRUTE)", tok.c_str());
         return;
@@ -152,7 +152,7 @@ static void cmd_search(int fd, const server_config_t *cfg, string rest)
 
     size_t scanned   = cfg->store->count;   //vectors in store right now 
     int    out_count = 0;
-    int    rc        = search_brute(cfg->store, query.data(), (int)k, results.data(), &out_count);
+    int    rc        = search_brute(*cfg->store, query, (int)k, results, out_count);
     /*
      * While still locked, copy each result vector's float components into a
      * flat snapshot buffer.  This lets umakes safely print them after unlock.
@@ -175,7 +175,7 @@ static void cmd_search(int fd, const server_config_t *cfg, string rest)
         return;
     }
 
-    const char *mode_str = (mode == SEARCH_MODE_BRUTE) ? "BRUTE" : "ANN";
+    const char *mode_str = (mode == search_mode_t::SEARCH_MODE_BRUTE) ? "BRUTE" : "ANN";
 
     // send one result line per hit
     for (int i = 0; i < out_count; i++) {
