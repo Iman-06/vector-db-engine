@@ -1,38 +1,23 @@
 /*
- * vdb_interface.h — Shared interface for the Vector DB Engine.
- *
- * Member 1 defines this header. Members 2 and 3 implement their parts
- * against it. Every cross-member function call goes through here so there
- * is exactly one place to look up names, parameter order, and return codes.
- *
- * HOW TO USE
- *   Member 1 (server / command dispatch): #include "vdb_interface.h"
- *   Member 2 (vector store):              already in vector_store.h;
- *                                         #include "vdb_interface.h" for shared types
- *   Member 3 (search + client):           implement search_brute() declared below
- *                                         and #include "vdb_interface.h"
+ vdb_interface.h — Shared interface for the Vector DB Engine.
+ Every cross-member function call goes through here so there is exactly one place to look up names, parameter order, and return codes.
+ Member 3 (search + client):           implement search_brute() declared below
+                                       and #include "vdb_interface.h"
  */
 
 #ifndef VDB_INTERFACE_H
 #define VDB_INTERFACE_H
-
 #include <stdint.h>
 #include <stddef.h>
-#include "vector_store.h"   /* pulls in vector_store_t, VS_OK, VS_ERR_* */
-
-/* ──────────────────────────────────────────────────────────────────────
- * Extra error codes (the VS_* codes from vector_store.h cover store errors)
- * ────────────────────────────────────────────────────────────────────── */
-#define VDB_ERR_BADCMD   -10   /* unrecognised or malformed command      */
-#define VDB_ERR_BADARGS  -11   /* wrong number / type of arguments       */
-#define VDB_ERR_SEARCH   -12   /* search function reported a failure     */
-
-/* ──────────────────────────────────────────────────────────────────────
- * Search modes — Phase 1 only uses BRUTE; ANN is reserved for Phase 2+
- * ────────────────────────────────────────────────────────────────────── */
+#include "vector_store.h"   
+// Extra error codes 
+#define VDB_ERR_BADCMD   -10   /* unrecognised or malformed command  */
+#define VDB_ERR_BADARGS  -11   /* wrong number / type of arguments    */
+#define VDB_ERR_SEARCH   -12   /* search function reported a failure   */
+                     
 typedef enum {
-    SEARCH_MODE_BRUTE = 0,   /* exhaustive linear scan (k-NN)           */
-    SEARCH_MODE_ANN   = 1    /* approximate nearest neighbour (Phase 2+) */
+    SEARCH_MODE_BRUTE = 0, 
+    SEARCH_MODE_ANN   = 1   
 } search_mode_t;
 
 /* ──────────────────────────────────────────────────────────────────────
@@ -44,21 +29,17 @@ typedef enum {
  *   slow ID scan.  Use vs_get_vector(vs, store_index) to read the data.
  * ────────────────────────────────────────────────────────────────────── */
 typedef struct {
-    int64_t  id;           /* the vector's stored ID                    */
-    double   distance;     /* Euclidean distance from query to this vec  */
-    size_t   store_index;  /* slot index — fill this in search_brute()  */
+    int64_t id;           /* the vector's stored ID                    */
+    double distance;     /* Euclidean distance from query to this vec  */
+    size_t store_index;  /* slot index — fill this in search_brute()  */
 } search_result_t;
 
-/* ──────────────────────────────────────────────────────────────────────
- * server_config_t — runtime settings parsed from command-line arguments.
- *
- * Shared (read-only after startup) across all client threads.
- * ────────────────────────────────────────────────────────────────────── */
+// server_config_t — runtime settings parsed from command-line arguments.
 typedef struct {
-    int              dim;            /* vector dimension  (--dim)        */
-    int              port;           /* TCP listen port   (--port)       */
-    char             data_path[256]; /* data directory    (--data)       */
-    vector_store_t  *store;          /* live vector store (shared/locked) */
+    int dim;            /* vector dimension  (--dim)        */
+    int port;           /* TCP listen port   (--port)       */
+    char data_path[256]; /* data directory    (--data)       */
+    vector_store_t *store;          /* live vector store (shared/locked) */
 } server_config_t;
 
 /* ──────────────────────────────────────────────────────────────────────
@@ -87,10 +68,6 @@ typedef struct {
  *
  * RETURNS: VS_OK (0) on success, negative error code on failure.
  * ────────────────────────────────────────────────────────────────────── */
-int search_brute(const vector_store_t *vs,
-                 const float          *query,
-                 int                   k,
-                 search_result_t      *out_results,
-                 int                  *out_count);
+int search_brute(const vector_store_t *vs, const float *query,int k,search_result_t *out_results,int *out_count);
 
 #endif /* VDB_INTERFACE_H */
