@@ -6,15 +6,14 @@
 #include <algorithm>
 using namespace std;
 static double distance_sq(const vector<float>& a, const float* b, int dim)
-{
+{ //using sqaure distance to avoid unnecessary sqrt computations
     double sum = 0;
     for (int i = 0; i < dim; i++)
         sum += (a[i] - b[i]) * (a[i] - b[i]);
     return sum;
 }
 struct Compare {
-    bool operator()(const search_result_t& x,
-                    const search_result_t& y) {
+    bool operator()(const search_result_t& x,const search_result_t& y) {
         return x.distance < y.distance;
     }
 };
