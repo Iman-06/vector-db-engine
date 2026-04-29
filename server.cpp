@@ -70,10 +70,8 @@ server.cpp — TCP server entry point for the Vector DB Engine.
  {
      //set defaults
      cfg->port = DEFAULT_PORT;
-     cfg->dim = DEFAULT_DIM;
-     std::strncpy(cfg->data_path, DEFAULT_DATA, sizeof(cfg->data_path) - 1);
-     cfg->data_path[sizeof(cfg->data_path) - 1] = '\0';
-     cfg->store = nullptr;
+     cfg->dim  = DEFAULT_DIM;
+    cfg->data_path = DEFAULT_DATA;
  
      for (int i = 1; i < argc; i++) {
          std::string arg = argv[i];
@@ -84,8 +82,7 @@ server.cpp — TCP server entry point for the Vector DB Engine.
                  usage(argv[0]);
              }
  
-             std::strncpy(cfg->data_path, argv[i], sizeof(cfg->data_path) - 1);
-             cfg->data_path[sizeof(cfg->data_path) - 1] = '\0';
+             cfg->data_path = argv[i];
  
          } else if (arg == "--dim") {
              if (++i >= argc) {

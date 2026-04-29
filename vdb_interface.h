@@ -1,4 +1,4 @@
- /*
+/*
  vdb_interface.h — Shared interface for the Vector DB Engine.
  Every cross-member function call goes through here so there is exactly one place to look up names, parameter order, and return codes.
  */
@@ -22,14 +22,14 @@ enum class search_mode_t {
     SEARCH_MODE_ANN   = 1
 };
 
- // search_result_t: one entry returned by any search function.
+ // search_result_t — one entry returned by any search function.
 struct search_result_t {
     int64_t id = 0;           
     double distance = 0.0;    
     size_t store_index = 0;
 };
 
-// server_config_t: runtime settings parsed from command-line arguments.
+// server_config_t runtime settings parsed from command-line arguments.
 struct server_config_t {
     int dim = 0;                 
     int port = 0;                
