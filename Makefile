@@ -16,7 +16,8 @@ LDFLAGS = -pthread
 SERVER_SRCS = server.cpp      \
               command.cpp     \
               vector_store.cpp\
-              search.cpp
+              search.cpp      \
+              kmeans.cpp
 
 SERVER_OBJS = $(SERVER_SRCS:.cpp=.o)
 
@@ -36,10 +37,11 @@ vdb: $(SERVER_OBJS)
 
 # Explicit header dependencies 
 # Tell make when to recompile an object if a header changes.
-server.o:        server.cpp        vdb_interface.h command.h vector_store.h
-command.o:       command.cpp       vdb_interface.h command.h vector_store.h
+server.o:        server.cpp        vdb_interface.h kmeans.h command.h vector_store.h
+command.o:       command.cpp       vdb_interface.h kmeans.h command.h vector_store.h
 vector_store.o:  vector_store.cpp  vector_store.h
-search.o:        search.cpp        vdb_interface.h vector_store.h
+search.o:        search.cpp        vdb_interface.h kmeans.h vector_store.h
+kmeans.o:        kmeans.cpp        kmeans.h vector_store.h
 
 CLI_SRCS = vdb_cli.cpp
 CLI_OBJS = $(CLI_SRCS:.cpp=.o)

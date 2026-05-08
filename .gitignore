@@ -1,0 +1,31 @@
+# Claude
+.claude/
+
+# Object files
+*.o
+
+# Executables
+vdb
+vdb-cli
+*.exe
+*.out
+
+# Build folders
+build/
+cmake-build-*/
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+compile_commands.json
+
+# Editors
+.vscode/
+.idea/
+
+# System files
+.DS_Store
+
+# Logs/temp
+*.log
+*.tmp

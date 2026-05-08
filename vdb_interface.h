@@ -11,6 +11,7 @@
 #include <vector>
 #include <string>
 #include "vector_store.h"
+#include "kmeans.h"
 using namespace std;
 // Extra error codes
 #define VDB_ERR_BADCMD   -10   /* unrecognised or malformed command  */
