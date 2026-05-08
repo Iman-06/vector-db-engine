@@ -31,7 +31,7 @@ vdb: $(SERVER_OBJS)
 	$(CC) $(LDFLAGS) -o $@ $^
 	@echo "Built: $@"
 
-# Compile each .c to a .o
+# Compile each .cpp to a .o
 %.o: %.cpp
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ $<
 
