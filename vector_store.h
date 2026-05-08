@@ -40,7 +40,7 @@ using vector_store_t = vector_store;
 #define VS_OK            0
 #define VS_ERR_NOMEM    -1
 #define VS_ERR_BADDIM   -2
-
+#define VS_ERR_BADINDEX   -3
 
 //one time initialization
 int vs_init(vector_store_t* vs, int dim);

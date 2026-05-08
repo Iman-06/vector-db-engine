@@ -12,6 +12,8 @@
 #include <string>
 #include "vector_store.h"
 #include "kmeans.h"
+#include "ivf.h"
+extern ivf_index_t g_ivf_index;
 using namespace std;
 // Extra error codes
 #define VDB_ERR_BADCMD   -10   /* unrecognised or malformed command  */
@@ -47,4 +49,12 @@ inline double vdb_dist_sq(const float* a, const float* b, int dim) {
     return sum;
 }
 int search_brute(const vector_store_t& vs,const vector<float>& query,int k,vector<search_result_t>& out_results,int& out_count);
+int search_ivf(const vector_store_t& vs,
+    const ivf_index_t& ivf,
+    const vector<float>& query,
+    int k,
+    int nprobe,
+    vector<search_result_t>& out_results,
+    int& out_count,
+    size_t& out_scanned);
 #endif

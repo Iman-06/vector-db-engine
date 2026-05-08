@@ -106,21 +106,46 @@ static void cmd_add(int fd, const server_config_t *cfg, string rest) {
    the lock before reading those floats another thread could realloc the
    array and our pointer would dangle. Snapshotting under the lock is safe.
  */
-static void cmd_search(int fd, const server_config_t *cfg, string rest)
+static void cmd_search(int fd, const server_config_t* cfg, string rest)
 {
     const int  dim = cfg->dim;
     string tok;
-    char      *endp;
+    char* endp;
 
     stringstream ss(rest);
 
     // parse query vector 
     vector<float> query((size_t)dim);
     for (int i = 0; i < dim; i++) {
+        // parse mode
+if (!(ss >> tok)) {
+    send_fmt(fd, "ERR SEARCH: missing mode (expected BRUTE or IVF)");
+    return;
+}
+
+search_mode_t mode;
+int nprobe = 1;  // default nprobe
+
+    if (tok == "BRUTE") {
+        mode = search_mode_t::SEARCH_MODE_BRUTE;
+    } else if (tok == "IVF") {
+        mode = search_mode_t::SEARCH_MODE_ANN;
+        
+        // Parse nprobe parameter
         if (!(ss >> tok)) {
-            send_fmt(fd, "ERR SEARCH: expected %d query components, got %d", dim, i);
+            send_fmt(fd, "ERR SEARCH: IVF mode requires nprobe parameter");
             return;
         }
+        char* endp;
+        nprobe = (int)strtol(tok.c_str(), &endp, 10);
+        if (*endp != '\0' || nprobe <= 0) {
+            send_fmt(fd, "ERR SEARCH: bad nprobe '%s'", tok.c_str());
+            return;
+        }
+    } else {
+        send_fmt(fd, "ERR SEARCH: unknown mode '%s'", tok.c_str());
+        return;
+    }
         query[i] = strtof(tok.c_str(), &endp);
         if (*endp != '\0') {
             send_fmt(fd, "ERR SEARCH: bad float '%s' at component %d", tok.c_str(), i);
@@ -141,14 +166,32 @@ static void cmd_search(int fd, const server_config_t *cfg, string rest)
 
     // parse mode
     if (!(ss >> tok)) {
-        send_fmt(fd, "ERR SEARCH: missing mode (expected BRUTE)");
+        send_fmt(fd, "ERR SEARCH: missing mode (expected BRUTE or IVF)");
         return;
     }
+
     search_mode_t mode;
+    int nprobe = 0;  // Only used for IVF mode
+
     if (tok == "BRUTE") {
         mode = search_mode_t::SEARCH_MODE_BRUTE;
-    } else {
-        send_fmt(fd, "ERR SEARCH: unknown mode '%s' (Phase 1 supports BRUTE)", tok.c_str());
+    }
+    else if (tok == "IVF") {
+        mode = search_mode_t::SEARCH_MODE_ANN;
+
+        // Parse nprobe parameter
+        if (!(ss >> tok)) {
+            send_fmt(fd, "ERR SEARCH: IVF mode requires nprobe parameter");
+            return;
+        }
+        nprobe = (int)strtol(tok.c_str(), &endp, 10);
+        if (*endp != '\0' || nprobe <= 0) {
+            send_fmt(fd, "ERR SEARCH: bad nprobe '%s' (must be positive integer)", tok.c_str());
+            return;
+        }
+    }
+    else {
+        send_fmt(fd, "ERR SEARCH: unknown mode '%s' (expected BRUTE or IVF)", tok.c_str());
         return;
     }
 
@@ -158,47 +201,82 @@ static void cmd_search(int fd, const server_config_t *cfg, string rest)
     // lock store -> search -> snapshot vectors -> unlock.
     vs_lock(cfg->store);
 
-    size_t scanned   = cfg->store->count;   //vectors in store right now 
+    size_t scanned = cfg->store->count;  // default for brute force
+    size_t ivf_scanned = 0;
     int    out_count = 0;
-    int    rc        = search_brute(*cfg->store, query, (int)k, results, out_count);
+    int    rc;
+
+    if (mode == search_mode_t::SEARCH_MODE_BRUTE) {
+        int rc;
+size_t scanned = 0;
+
+if (mode == search_mode_t::SEARCH_MODE_BRUTE) {
+    rc = search_brute(*cfg->store, query, (int)k, results, out_count);
+    scanned = cfg->store->count;
+} else {
+    // IVF search
+    if (!g_ivf_index.built) {
+        vs_unlock(cfg->store);
+        send_fmt(fd, "ERR SEARCH: IVF index not built. Use BUILD first.");
+        return;
+    }
+    size_t ivf_scanned = 0;
+    rc = search_ivf(*cfg->store, g_ivf_index, query, (int)k, nprobe, results, out_count, ivf_scanned);
+    scanned = ivf_scanned;
+}
+        scanned = cfg->store->count;  // Brute force scans all vectors
+    }
+    else {
+        // IVF search
+        if (!g_ivf_index.built) {
+            vs_unlock(cfg->store);
+            send_fmt(fd, "ERR SEARCH: IVF index not built. Use BUILD first.");
+            return;
+        }
+        rc = search_ivf(*cfg->store, g_ivf_index, query, (int)k, nprobe, results, out_count, ivf_scanned);
+        scanned = ivf_scanned;
+    }
+
     /*
      * While still locked, copy each result vector's float components into a
-     * flat snapshot buffer.  This lets umakes safely print them after unlock.
+     * flat snapshot buffer.  This lets us safely print them after unlock.
      */
     vector<float> snap;
     if (rc == VS_OK && out_count > 0) {
-        snap.resize((size_t)out_count * (size_t)dim);// this is the snapshot buffer for the result vectors. It is a flat array where each result's vector components are stored contiguously
+        snap.resize((size_t)out_count * (size_t)dim);
         for (int i = 0; i < out_count; i++) {
-            const float *v = vs_get_vector(cfg->store, results[i].store_index);
-            if (v)
-            {memcpy(snap.data() + (size_t)i * (size_t)dim, v, (size_t)dim * sizeof(float));}
+            const float* v = vs_get_vector(cfg->store, results[i].store_index);
+            if (v) {
+                memcpy(snap.data() + (size_t)i * (size_t)dim, v, (size_t)dim * sizeof(float));
+            }
         }
     }
-
 
     vs_unlock(cfg->store);
 
     if (rc != VS_OK) {
-        send_fmt(fd, "ERR SEARCH: search failed (rc=%d)", rc);
+        if (rc == VS_ERR_BADINDEX) {
+            send_fmt(fd, "ERR SEARCH: IVF index not built properly");
+        }
+        else {
+            send_fmt(fd, "ERR SEARCH: search failed (rc=%d)", rc);
+        }
         return;
     }
-
-    const char *mode_str = (mode == search_mode_t::SEARCH_MODE_BRUTE) ? "BRUTE" : "ANN";
 
     // send one result line per hit
     for (int i = 0; i < out_count; i++) {
         ostringstream line;
 
         // start: id and distance
-        line.setf(ios::fixed); // use fixed-point notation for floats
-        line.precision(6); // 6 decimal places for float components
+        line.setf(ios::fixed);
+        line.precision(6);
         line << (long long)results[i].id << " " << results[i].distance;
 
         // append each vector component
         if (!snap.empty()) {
-            const float *v = snap.data() + (size_t)i * (size_t)dim;
+            const float* v = snap.data() + (size_t)i * (size_t)dim;
             for (int j = 0; j < dim; j++) {
-                // Guard against absurdly long lines if dim is huge.  We still send the id and distance, just truncate the vector components.
                 if ((int)line.str().size() >= MAX_LINE - 16) break;
                 line << " " << v[j];
             }
@@ -209,11 +287,14 @@ static void cmd_search(int fd, const server_config_t *cfg, string rest)
         write(fd, out.c_str(), out.size());
     }
 
-    // summary line
-    send_fmt(fd, "(%d results, mode = %s, scanned %zu)",
-             out_count, mode_str, scanned);
+    // summary line (updated for IVF mode)
+    if (mode == search_mode_t::SEARCH_MODE_BRUTE) {
+        send_fmt(fd, "(%d results, mode = BRUTE, scanned %zu)", out_count, scanned);
+    }
+    else {
+        send_fmt(fd, "(%d results, mode = IVF, nprobe = %d, scanned %zu)", out_count, nprobe, scanned);
+    }
 }
-
 // cmd_stats handle: STATS
 static void cmd_stats(int fd, const server_config_t *cfg) {
     vs_lock(cfg->store);
