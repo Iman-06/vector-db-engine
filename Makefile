@@ -17,7 +17,8 @@ SERVER_SRCS = server.cpp      \
               command.cpp     \
               vector_store.cpp\
               search.cpp      \
-              kmeans.cpp
+              kmeans.cpp	  \
+			  ivf.cpp
 
 SERVER_OBJS = $(SERVER_SRCS:.cpp=.o)
 
@@ -42,7 +43,7 @@ command.o:       command.cpp       vdb_interface.h kmeans.h command.h vector_sto
 vector_store.o:  vector_store.cpp  vector_store.h
 search.o:        search.cpp        vdb_interface.h kmeans.h vector_store.h
 kmeans.o:        kmeans.cpp        kmeans.h vector_store.h
-
+ivf.o:			 ivf.cpp 		   ivf.h vector_store.h kmeans.h
 CLI_SRCS = vdb_cli.cpp
 CLI_OBJS = $(CLI_SRCS:.cpp=.o)
 

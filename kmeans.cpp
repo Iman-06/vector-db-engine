@@ -1,20 +1,10 @@
 #include "kmeans.h"
+#include "vdb_interface.h"
 #include <algorithm>
 #include <cmath>
 #include <numeric> 
 #include <random>
-
 using namespace std;
-static double distance_sq_ptr(const float* a, const float* b, int dim) 
-// Computes squared Euclidean distance between two vectors of dimension `dim`.
-{
-    double sum = 0.0;
-    for (int i = 0; i < dim; i++) {
-        double diff = static_cast<double>(a[i]) - static_cast<double>(b[i]);
-        sum += diff * diff;
-    }
-    return sum;
-}
 
 static const float* centroid_ptr(const vector<float>& centroids, int cluster, int dim)
 // Returns a pointer to the centroid vector for the given cluster index.
@@ -26,10 +16,10 @@ static int nearest_centroid(const float* vec, const vector<float>& centroids, in
 // Finds the nearest centroid to the given vector.
 {
     int best_cluster = 0;
-    double best_dist = distance_sq_ptr(vec, centroid_ptr(centroids, 0, dim), dim);
+    double best_dist = vdb_dist_sq(vec, centroid_ptr(centroids, 0, dim), dim);
 
     for (int c = 1; c < k; c++) {
-        double dist = distance_sq_ptr(vec, centroid_ptr(centroids, c, dim), dim);
+        double dist = vdb_dist_sq(vec, centroid_ptr(centroids, c, dim), dim);
         if (dist < best_dist) {
             best_dist = dist;
             best_cluster = c;

@@ -4,7 +4,7 @@
 #include "command.h"
 #include "vdb_interface.h"
 #include "vector_store.h"
-
+#include "ivf.h"
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -18,7 +18,7 @@
 #include <ext/stdio_filebuf.h>
 
 using namespace std;
-
+ivf_index_t g_ivf_index; 
 /* Maximum bytes in a single command line (long SEARCH lines can be large) */
 #define MAX_LINE  8192
 
@@ -82,7 +82,15 @@ static void cmd_add(int fd, const server_config_t *cfg, string rest) {
 
     //store
     int rc = vs_add(cfg->store, id, vec.data());
-
+    if (rc == VS_OK && g_ivf_index.built) {
+        // store mutex is NOT held here — vs_add already returned.
+        // We need to lock to safely read the vector we just inserted.
+        vs_lock(cfg->store);
+        size_t new_idx = cfg->store->count - 1; // vs_add appends, so last slot
+        const float* vec_ptr = vs_get_vector(cfg->store, new_idx);
+        ivf_insert(g_ivf_index, vec_ptr, (int)new_idx);
+        vs_unlock(cfg->store);
+    }
     switch (rc) {
         case VS_OK:        send_fmt(fd, "OK");                        break;
         case VS_ERR_NOMEM: send_fmt(fd, "ERR ADD: out of memory");    break;
@@ -212,13 +220,50 @@ static void cmd_stats(int fd, const server_config_t *cfg) {
     int    dim   = cfg->store->dim;
     size_t count = cfg->store->count;
     vs_unlock(cfg->store);
+    send_fmt(fd, "dimension     : %d",  dim);
+    send_fmt(fd, "total vectors : %zu", count);
 
-    send_fmt(fd, "dim %d",       dim);
-    send_fmt(fd, "vectors %zu",  count);
-    send_fmt(fd, "index_built 0");
-    send_fmt(fd, "clusters N/A");
+    if (g_ivf_index.built) {
+        send_fmt(fd, "index built   : yes");
+        send_fmt(fd, "clusters      : %d", g_ivf_index.k);
+        string sizes;
+        for (int c = 0; c < g_ivf_index.k; c++) {
+            if (c > 0) sizes += ", ";
+            sizes += to_string(g_ivf_index.clusters[(size_t)c].size());
+        }
+        send_fmt(fd, "cluster sizes : %s", sizes.c_str());
+    } else {
+        send_fmt(fd, "index built   : no");
+        send_fmt(fd, "clusters      : N/A");
+    }
 }
+static void cmd_build(int fd, const server_config_t *cfg) {
+    vs_lock(cfg->store);
 
+    if (cfg->store->count == 0) {
+        vs_unlock(cfg->store);
+        send_fmt(fd, "ERR BUILD: no vectors stored");
+        return;
+    }
+
+    send_fmt(fd, "Building IVF index ...");
+
+    // kmeans_cluster reads the store — must be called under the lock
+    int rc = ivf_build(*cfg->store, g_ivf_index);
+
+    vs_unlock(cfg->store);
+
+    if (rc != VS_OK) {
+        send_fmt(fd, "ERR BUILD: k-means failed (rc=%d)", rc);
+        return;
+    }
+
+    send_fmt(fd, "vectors   : %zu",  cfg->store->count);
+    send_fmt(fd, "clusters  : %d",   g_ivf_index.k);
+    send_fmt(fd, "iterations: %d",   g_ivf_index.iterations);
+    send_fmt(fd, "done in %.3f s.",  g_ivf_index.build_time_seconds);
+    send_fmt(fd, "OK");
+}
 void handle_client(int fd, const server_config_t *cfg) {
     // dup so that filebuf.close() does not close the original write fd
     int rfd = dup(fd);
@@ -259,13 +304,12 @@ void handle_client(int fd, const server_config_t *cfg) {
         //  dispatch
         if (keyword == "ADD") {
             cmd_add(fd, cfg, rest);
-
         } else if (keyword == "SEARCH") {
             cmd_search(fd, cfg, rest);
-
+        }else if (keyword == "BUILD") {
+            cmd_build(fd, cfg);
         } else if (keyword == "STATS") {
             cmd_stats(fd, cfg);
-
         } else if (keyword == "QUIT") {
             send_fmt(fd, "BYE");
             break;   //exit loop — server keeps running, only this client disconnects 

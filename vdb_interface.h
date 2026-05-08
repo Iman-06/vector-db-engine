@@ -37,5 +37,14 @@ struct server_config_t {
     string data_path;       
     vector_store_t* store = nullptr;
 };
+
+inline double vdb_dist_sq(const float* a, const float* b, int dim) { 
+    double sum = 0.0;
+    for (int i = 0; i < dim; i++) {
+        double d = (double)a[i] - (double)b[i];
+        sum += d * d;
+    }
+    return sum;
+}
 int search_brute(const vector_store_t& vs,const vector<float>& query,int k,vector<search_result_t>& out_results,int& out_count);
 #endif
