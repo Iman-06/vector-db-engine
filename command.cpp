@@ -5,6 +5,7 @@
 #include "vdb_interface.h"
 #include "vector_store.h"
 #include "ivf.h"
+#include "snapshot.h"
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -18,146 +19,80 @@
 #include <ext/stdio_filebuf.h>
 
 using namespace std;
-ivf_index_t g_ivf_index; 
-/* Maximum bytes in a single command line (long SEARCH lines can be large) */
-#define MAX_LINE  8192
 
-/* Upper bound on k to guard against absurd allocations */
+ivf_index_t g_ivf_index;
+
+static std::string snapshot_path(const server_config_t* cfg) {
+    return cfg->data_path + "/snapshot.vdb";
+}
+
+/* Maximum bytes in a single command line */
+#define MAX_LINE  8192
+/* Upper bound on k */
 #define MAX_K     10000
 
-/*send_fmt — format a string and write it to the client socket.
-  We write with a single write() call so that short responses are not split across multiple TCP segments by Nagle's algorithm.
- */
 static void send_fmt(int fd, const char *fmt, ...) {
-    char  buf[MAX_LINE + 4];
+    char buf[MAX_LINE + 4];
     va_list ap;
     va_start(ap, fmt);
-    int n = vsnprintf(buf, sizeof(buf) - 2, fmt, ap);// this is like printf, but: Writes into buf instead of printing -2 leaves space for \n and null terminator. returns the num of char written
-    va_end(ap); // cleans va_list ap
+    int n = vsnprintf(buf, sizeof(buf) - 2, fmt, ap);
+    va_end(ap);
     if (n <= 0) return;
     if (buf[n - 1] != '\n') { buf[n] = '\n'; n++; }
     write(fd, buf, (size_t)n);
 }
 
-
-//cmd_add: handle: ADD <id> <v1> <v2> ... <vD>
+// cmd_add: handle ADD <id> <v1> <v2> ... <vD>
 static void cmd_add(int fd, const server_config_t *cfg, string rest) {
-    const int  dim = cfg->dim;
+    const int dim = cfg->dim;
     string tok;
-    char  *endp;
-
+    char *endp;
     stringstream ss(rest);
 
-    //parse id
-    if (!(ss >> tok)) {
-        send_fmt(fd, "ERR ADD: missing id");
-        return;
-    }
+    if (!(ss >> tok)) { send_fmt(fd, "ERR ADD: missing id"); return; }
     int64_t id = strtoll(tok.c_str(), &endp, 10);
-    if (*endp != '\0') {
-        send_fmt(fd, "ERR ADD: bad id '%s' (must be an integer)", tok.c_str());
-        return;
-    }
+    if (*endp != '\0') { send_fmt(fd, "ERR ADD: bad id '%s'", tok.c_str()); return; }
 
-    // parse dim float components 
     vector<float> vec((size_t)dim);
-
     for (int i = 0; i < dim; i++) {
-        if (!(ss >> tok)) {
-            send_fmt(fd, "ERR ADD: expected %d components, got %d", dim, i);
-            return;
-        }
+        if (!(ss >> tok)) { send_fmt(fd, "ERR ADD: expected %d components, got %d", dim, i); return; }
         vec[i] = strtof(tok.c_str(), &endp);
-        if (*endp != '\0') {
-            send_fmt(fd, "ERR ADD: bad float '%s' at component %d", tok.c_str(), i);
-            return;
-        }
+        if (*endp != '\0') { send_fmt(fd, "ERR ADD: bad float '%s' at component %d", tok.c_str(), i); return; }
     }
+    if (ss >> tok) { send_fmt(fd, "ERR ADD: too many values (server dim = %d)", dim); return; }
 
-    // reject extra tokens 
-    if (ss >> tok) {
-        send_fmt(fd, "ERR ADD: too many values (server dim = %d)", dim);
-        return;
-    }
-
-    //store
     int rc = vs_add(cfg->store, id, vec.data());
     if (rc == VS_OK && g_ivf_index.built) {
-        // store mutex is NOT held here — vs_add already returned.
-        // We need to lock to safely read the vector we just inserted.
         vs_lock(cfg->store);
-        size_t new_idx = cfg->store->count - 1; // vs_add appends, so last slot
+        size_t new_idx = cfg->store->count - 1;
         const float* vec_ptr = vs_get_vector(cfg->store, new_idx);
         ivf_insert(g_ivf_index, vec_ptr, (int)new_idx);
         vs_unlock(cfg->store);
     }
     switch (rc) {
-        case VS_OK:        send_fmt(fd, "OK");                        break;
-        case VS_ERR_NOMEM: send_fmt(fd, "ERR ADD: out of memory");    break;
+        case VS_OK:        send_fmt(fd, "OK"); break;
+        case VS_ERR_NOMEM: send_fmt(fd, "ERR ADD: out of memory"); break;
         default:           send_fmt(fd, "ERR ADD: store error %d", rc); break;
     }
 }
 
-/* 
- cmd_search — handle: SEARCH <v1> ... <vD> <k> BRUTE
- WHY we snapshot vectors while holding the lock:
-   We need to print each result's float components. vs_get_vector()
-   returns a raw pointer into the store's internal array. If we released
-   the lock before reading those floats another thread could realloc the
-   array and our pointer would dangle. Snapshotting under the lock is safe.
- */
-static void cmd_search(int fd, const server_config_t* cfg, string rest)
-{
-    const int  dim = cfg->dim;
+// cmd_search: handle SEARCH <v1> ... <vD> <k> BRUTE|IVF [nprobe]
+static void cmd_search(int fd, const server_config_t* cfg, string rest) {
+    const int dim = cfg->dim;
     string tok;
     char* endp;
-
     stringstream ss(rest);
 
-    // parse query vector 
+    // parse query vector
     vector<float> query((size_t)dim);
     for (int i = 0; i < dim; i++) {
-        // parse mode
-if (!(ss >> tok)) {
-    send_fmt(fd, "ERR SEARCH: missing mode (expected BRUTE or IVF)");
-    return;
-}
-
-search_mode_t mode;
-int nprobe = 1;  // default nprobe
-
-    if (tok == "BRUTE") {
-        mode = search_mode_t::SEARCH_MODE_BRUTE;
-    } else if (tok == "IVF") {
-        mode = search_mode_t::SEARCH_MODE_ANN;
-        
-        // Parse nprobe parameter
-        if (!(ss >> tok)) {
-            send_fmt(fd, "ERR SEARCH: IVF mode requires nprobe parameter");
-            return;
-        }
-        char* endp;
-        nprobe = (int)strtol(tok.c_str(), &endp, 10);
-        if (*endp != '\0' || nprobe <= 0) {
-            send_fmt(fd, "ERR SEARCH: bad nprobe '%s'", tok.c_str());
-            return;
-        }
-    } else {
-        send_fmt(fd, "ERR SEARCH: unknown mode '%s'", tok.c_str());
-        return;
-    }
+        if (!(ss >> tok)) { send_fmt(fd, "ERR SEARCH: expected %d components, got %d", dim, i); return; }
         query[i] = strtof(tok.c_str(), &endp);
-        if (*endp != '\0') {
-            send_fmt(fd, "ERR SEARCH: bad float '%s' at component %d", tok.c_str(), i);
-            return;
-        }
+        if (*endp != '\0') { send_fmt(fd, "ERR SEARCH: bad float '%s' at component %d", tok.c_str(), i); return; }
     }
 
     // parse k
-    if (!(ss >> tok)) {
-        send_fmt(fd, "ERR SEARCH: missing k");
-        return;
-    }
+    if (!(ss >> tok)) { send_fmt(fd, "ERR SEARCH: missing k"); return; }
     long k = strtol(tok.c_str(), &endp, 10);
     if (*endp != '\0' || k <= 0 || k > MAX_K) {
         send_fmt(fd, "ERR SEARCH: bad k '%s' (must be 1..%d)", tok.c_str(), MAX_K);
@@ -165,115 +100,63 @@ int nprobe = 1;  // default nprobe
     }
 
     // parse mode
-    if (!(ss >> tok)) {
-        send_fmt(fd, "ERR SEARCH: missing mode (expected BRUTE or IVF)");
-        return;
-    }
+    if (!(ss >> tok)) { send_fmt(fd, "ERR SEARCH: missing mode (expected BRUTE or IVF)"); return; }
 
     search_mode_t mode;
-    int nprobe = 0;  // Only used for IVF mode
+    int nprobe = 1;
 
     if (tok == "BRUTE") {
         mode = search_mode_t::SEARCH_MODE_BRUTE;
-    }
-    else if (tok == "IVF") {
+    } else if (tok == "IVF") {
         mode = search_mode_t::SEARCH_MODE_ANN;
-
-        // Parse nprobe parameter
-        if (!(ss >> tok)) {
-            send_fmt(fd, "ERR SEARCH: IVF mode requires nprobe parameter");
-            return;
-        }
+        if (!(ss >> tok)) { send_fmt(fd, "ERR SEARCH: IVF mode requires nprobe parameter"); return; }
         nprobe = (int)strtol(tok.c_str(), &endp, 10);
-        if (*endp != '\0' || nprobe <= 0) {
-            send_fmt(fd, "ERR SEARCH: bad nprobe '%s' (must be positive integer)", tok.c_str());
-            return;
-        }
-    }
-    else {
+        if (*endp != '\0' || nprobe <= 0) { send_fmt(fd, "ERR SEARCH: bad nprobe '%s'", tok.c_str()); return; }
+    } else {
         send_fmt(fd, "ERR SEARCH: unknown mode '%s' (expected BRUTE or IVF)", tok.c_str());
         return;
     }
 
-    // allocate result array
     vector<search_result_t> results((size_t)k);
-
-    // lock store -> search -> snapshot vectors -> unlock.
     vs_lock(cfg->store);
 
-    size_t scanned = cfg->store->count;  // default for brute force
-    size_t ivf_scanned = 0;
-    int    out_count = 0;
-    int    rc;
+    size_t scanned = 0;
+    int out_count = 0;
+    int rc;
 
     if (mode == search_mode_t::SEARCH_MODE_BRUTE) {
-        int rc;
-size_t scanned = 0;
-
-if (mode == search_mode_t::SEARCH_MODE_BRUTE) {
-    rc = search_brute(*cfg->store, query, (int)k, results, out_count);
-    scanned = cfg->store->count;
-} else {
-    // IVF search
-    if (!g_ivf_index.built) {
-        vs_unlock(cfg->store);
-        send_fmt(fd, "ERR SEARCH: IVF index not built. Use BUILD first.");
-        return;
-    }
-    size_t ivf_scanned = 0;
-    rc = search_ivf(*cfg->store, g_ivf_index, query, (int)k, nprobe, results, out_count, ivf_scanned);
-    scanned = ivf_scanned;
-}
-        scanned = cfg->store->count;  // Brute force scans all vectors
-    }
-    else {
-        // IVF search
+        rc = search_brute(*cfg->store, query, (int)k, results, out_count);
+        scanned = cfg->store->count;
+    } else {
         if (!g_ivf_index.built) {
             vs_unlock(cfg->store);
             send_fmt(fd, "ERR SEARCH: IVF index not built. Use BUILD first.");
             return;
         }
-        rc = search_ivf(*cfg->store, g_ivf_index, query, (int)k, nprobe, results, out_count, ivf_scanned);
-        scanned = ivf_scanned;
+        rc = search_ivf(*cfg->store, g_ivf_index, query, (int)k, nprobe, results, out_count, scanned);
     }
 
-    /*
-     * While still locked, copy each result vector's float components into a
-     * flat snapshot buffer.  This lets us safely print them after unlock.
-     */
+    // snapshot vectors while still holding the lock
     vector<float> snap;
     if (rc == VS_OK && out_count > 0) {
         snap.resize((size_t)out_count * (size_t)dim);
         for (int i = 0; i < out_count; i++) {
             const float* v = vs_get_vector(cfg->store, results[i].store_index);
-            if (v) {
-                memcpy(snap.data() + (size_t)i * (size_t)dim, v, (size_t)dim * sizeof(float));
-            }
+            if (v) memcpy(snap.data() + (size_t)i * (size_t)dim, v, (size_t)dim * sizeof(float));
         }
     }
-
     vs_unlock(cfg->store);
 
     if (rc != VS_OK) {
-        if (rc == VS_ERR_BADINDEX) {
-            send_fmt(fd, "ERR SEARCH: IVF index not built properly");
-        }
-        else {
-            send_fmt(fd, "ERR SEARCH: search failed (rc=%d)", rc);
-        }
+        send_fmt(fd, "ERR SEARCH: search failed (rc=%d)", rc);
         return;
     }
 
-    // send one result line per hit
     for (int i = 0; i < out_count; i++) {
         ostringstream line;
-
-        // start: id and distance
         line.setf(ios::fixed);
         line.precision(6);
         line << (long long)results[i].id << " " << results[i].distance;
-
-        // append each vector component
         if (!snap.empty()) {
             const float* v = snap.data() + (size_t)i * (size_t)dim;
             for (int j = 0; j < dim; j++) {
@@ -281,26 +164,23 @@ if (mode == search_mode_t::SEARCH_MODE_BRUTE) {
                 line << " " << v[j];
             }
         }
-
-        // ensure newline
         string out = line.str() + "\n";
         write(fd, out.c_str(), out.size());
     }
 
-    // summary line (updated for IVF mode)
-    if (mode == search_mode_t::SEARCH_MODE_BRUTE) {
+    if (mode == search_mode_t::SEARCH_MODE_BRUTE)
         send_fmt(fd, "(%d results, mode = BRUTE, scanned %zu)", out_count, scanned);
-    }
-    else {
+    else
         send_fmt(fd, "(%d results, mode = IVF, nprobe = %d, scanned %zu)", out_count, nprobe, scanned);
-    }
 }
-// cmd_stats handle: STATS
+
+// cmd_stats: handle STATS
 static void cmd_stats(int fd, const server_config_t *cfg) {
     vs_lock(cfg->store);
     int    dim   = cfg->store->dim;
     size_t count = cfg->store->count;
     vs_unlock(cfg->store);
+
     send_fmt(fd, "dimension     : %d",  dim);
     send_fmt(fd, "total vectors : %zu", count);
 
@@ -318,6 +198,8 @@ static void cmd_stats(int fd, const server_config_t *cfg) {
         send_fmt(fd, "clusters      : N/A");
     }
 }
+
+// cmd_build: handle BUILD
 static void cmd_build(int fd, const server_config_t *cfg) {
     vs_lock(cfg->store);
 
@@ -328,16 +210,10 @@ static void cmd_build(int fd, const server_config_t *cfg) {
     }
 
     send_fmt(fd, "Building IVF index ...");
-
-    // kmeans_cluster reads the store — must be called under the lock
     int rc = ivf_build(*cfg->store, g_ivf_index);
-
     vs_unlock(cfg->store);
 
-    if (rc != VS_OK) {
-        send_fmt(fd, "ERR BUILD: k-means failed (rc=%d)", rc);
-        return;
-    }
+    if (rc != VS_OK) { send_fmt(fd, "ERR BUILD: k-means failed (rc=%d)", rc); return; }
 
     send_fmt(fd, "vectors   : %zu",  cfg->store->count);
     send_fmt(fd, "clusters  : %d",   g_ivf_index.k);
@@ -345,8 +221,8 @@ static void cmd_build(int fd, const server_config_t *cfg) {
     send_fmt(fd, "done in %.3f s.",  g_ivf_index.build_time_seconds);
     send_fmt(fd, "OK");
 }
+
 void handle_client(int fd, const server_config_t *cfg) {
-    // dup so that filebuf.close() does not close the original write fd
     int rfd = dup(fd);
     if (rfd < 0) {
         cerr << "handle_client: dup: " << strerror(errno) << endl;
@@ -354,52 +230,64 @@ void handle_client(int fd, const server_config_t *cfg) {
         return;
     }
 
-    __gnu_cxx::stdio_filebuf<char> filebuf(rfd, ios::in);// converts socket/file descriptor into C++ stream buffer
-    istream in(&filebuf); 
-
+    __gnu_cxx::stdio_filebuf<char> filebuf(rfd, ios::in);
+    istream in(&filebuf);
     string line;
 
     while (getline(in, line)) {
-
-        //strip trailing CR / LF 
+        // strip trailing CR/LF
         size_t len = line.size();
         while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
             line[--len] = '\0';
         line.resize(len);
-
-        if (len == 0) continue;   // blank line — ignore silently
+        if (len == 0) continue;
 
         size_t pos = line.find_first_of(" \t");
-        string rest;
-        string keyword;
-
+        string keyword, rest;
         if (pos == string::npos) {
             keyword = line;
             rest = "";
         } else {
-            keyword = line.substr(0, pos);   // null-terminate the keyword
-            rest = line.substr(pos + 1);     // rest now points to the first argument char
+            keyword = line.substr(0, pos);
+            rest = line.substr(pos + 1);
         }
-        // `line` now holds only the keyword; `rest` holds the arguments
 
-        //  dispatch
+        // dispatch
         if (keyword == "ADD") {
             cmd_add(fd, cfg, rest);
         } else if (keyword == "SEARCH") {
             cmd_search(fd, cfg, rest);
-        }else if (keyword == "BUILD") {
+        } else if (keyword == "BUILD") {
             cmd_build(fd, cfg);
         } else if (keyword == "STATS") {
             cmd_stats(fd, cfg);
+        } else if (keyword == "SAVE") {
+            vs_lock(cfg->store);
+            int rc = snapshot_save(cfg->store, &g_ivf_index, snapshot_path(cfg));
+            vs_unlock(cfg->store);
+            if (rc == SNAP_OK)
+                send_fmt(fd, "OK saved %zu vectors", cfg->store->count);
+            else
+                send_fmt(fd, "ERR SAVE failed (rc=%d)", rc);
+        } else if (keyword == "LOAD") {
+            vs_lock(cfg->store);
+            int rc = snapshot_load(cfg->store, &g_ivf_index, snapshot_path(cfg));
+            vs_unlock(cfg->store);
+            if (rc == SNAP_OK)
+                send_fmt(fd, "OK loaded %zu vectors", cfg->store->count);
+            else if (rc == SNAP_ERR_IO)
+                send_fmt(fd, "ERR LOAD: file not found or I/O error");
+            else if (rc == SNAP_ERR_MAGIC)
+                send_fmt(fd, "ERR LOAD: bad file format (wrong magic)");
+            else
+                send_fmt(fd, "ERR LOAD failed (rc=%d)", rc);
         } else if (keyword == "QUIT") {
             send_fmt(fd, "BYE");
-            break;   //exit loop — server keeps running, only this client disconnects 
-
+            break;
         } else {
             send_fmt(fd, "ERR unknown command '%s'", keyword.c_str());
         }
     }
 
     filebuf.close();
-
 }

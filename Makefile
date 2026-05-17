@@ -13,12 +13,7 @@ CPPFLAGS = -std=c++17
 LDFLAGS = -pthread
 
 #  Server sources
-SERVER_SRCS = server.cpp      \
-              command.cpp     \
-              vector_store.cpp\
-              search.cpp      \
-              kmeans.cpp	  \
-			  ivf.cpp
+SERVER_SRCS = server.cpp command.cpp vector_store.cpp ivf.cpp kmeans.cpp search.cpp snapshot.cpp
 
 SERVER_OBJS = $(SERVER_SRCS:.cpp=.o)
 
