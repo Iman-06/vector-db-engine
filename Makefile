@@ -20,7 +20,7 @@ SERVER_OBJS = $(SERVER_SRCS:.cpp=.o)
 #Targets
 .PHONY: all clean
 
-all: vdb vdb-cli
+all: vdb vdb-cli benchmark/benchmark
 
 # Link the server binary
 vdb: $(SERVER_OBJS)
@@ -45,7 +45,13 @@ CLI_OBJS = $(CLI_SRCS:.cpp=.o)
 vdb-cli: $(CLI_OBJS)
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(LDFLAGS) -o $@ $^
 
-# Clean 
+# Benchmark — standalone TCP client, no server headers needed
+benchmark/benchmark: benchmark/benchmark.cpp
+	@mkdir -p benchmark
+	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $<
+	@echo "Built: $@"
+
+# Clean
 clean:
-	rm -f $(SERVER_OBJS) $(CLI_OBJS) vdb vdb-cli
+	rm -f $(SERVER_OBJS) $(CLI_OBJS) vdb vdb-cli benchmark/benchmark
 	@echo "Cleaned."
