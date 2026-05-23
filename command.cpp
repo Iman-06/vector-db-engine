@@ -5,7 +5,7 @@
 #include "vdb_interface.h"
 #include "vector_store.h"
 #include "ivf.h"
-#include "snapshot.h"
+#include "normalize.h"
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -22,13 +22,7 @@ using namespace std;
 
 ivf_index_t g_ivf_index;
 
-static std::string snapshot_path(const server_config_t* cfg) {
-    return cfg->data_path + "/snapshot.vdb";
-}
-
-/* Maximum bytes in a single command line */
 #define MAX_LINE  8192
-/* Upper bound on k */
 #define MAX_K     10000
 
 static void send_fmt(int fd, const char *fmt, ...) {
@@ -61,6 +55,15 @@ static void cmd_add(int fd, const server_config_t *cfg, string rest) {
     }
     if (ss >> tok) { send_fmt(fd, "ERR ADD: too many values (server dim = %d)", dim); return; }
 
+    // ── Member 2: normalize if cosine metric is selected ──────────────────
+    if (cfg->metric == metric_t::COSINE) {
+        int nrc = normalize_vec(vec);
+        if (nrc == NORM_ERR_ZERO) {
+            send_fmt(fd, "ERR ADD: zero vector cannot be normalized for cosine metric");
+            return;
+        }
+    }
+
     int rc = vs_add(cfg->store, id, vec.data());
     if (rc == VS_OK && g_ivf_index.built) {
         vs_lock(cfg->store);
@@ -89,6 +92,15 @@ static void cmd_search(int fd, const server_config_t* cfg, string rest) {
         if (!(ss >> tok)) { send_fmt(fd, "ERR SEARCH: expected %d components, got %d", dim, i); return; }
         query[i] = strtof(tok.c_str(), &endp);
         if (*endp != '\0') { send_fmt(fd, "ERR SEARCH: bad float '%s' at component %d", tok.c_str(), i); return; }
+    }
+
+    // ── Member 2: normalize query vector if cosine metric ─────────────────
+    if (cfg->metric == metric_t::COSINE) {
+        int nrc = normalize_vec(query);
+        if (nrc == NORM_ERR_ZERO) {
+            send_fmt(fd, "ERR SEARCH: zero query vector cannot be used with cosine metric");
+            return;
+        }
     }
 
     // parse k
@@ -133,10 +145,11 @@ static void cmd_search(int fd, const server_config_t* cfg, string rest) {
             send_fmt(fd, "ERR SEARCH: IVF index not built. Use BUILD first.");
             return;
         }
-        rc = search_ivf(*cfg->store, g_ivf_index, query, (int)k, nprobe, results, out_count, scanned);
+        rc = search_ivf(*cfg->store, g_ivf_index, query, (int)k, nprobe,
+                        results, out_count, scanned, cfg->metric);
     }
 
-    // snapshot vectors while still holding the lock
+    // snapshot vectors while still locked
     vector<float> snap;
     if (rc == VS_OK && out_count > 0) {
         snap.resize((size_t)out_count * (size_t)dim);
@@ -151,6 +164,8 @@ static void cmd_search(int fd, const server_config_t* cfg, string rest) {
         send_fmt(fd, "ERR SEARCH: search failed (rc=%d)", rc);
         return;
     }
+
+    const char* metric_name = (cfg->metric == metric_t::COSINE) ? "cosine" : "euclidean";
 
     for (int i = 0; i < out_count; i++) {
         ostringstream line;
@@ -169,9 +184,9 @@ static void cmd_search(int fd, const server_config_t* cfg, string rest) {
     }
 
     if (mode == search_mode_t::SEARCH_MODE_BRUTE)
-        send_fmt(fd, "(%d results, mode = BRUTE, scanned %zu)", out_count, scanned);
+        send_fmt(fd, "(%d results, mode=BRUTE, metric=%s, scanned %zu)", out_count, metric_name, scanned);
     else
-        send_fmt(fd, "(%d results, mode = IVF, nprobe = %d, scanned %zu)", out_count, nprobe, scanned);
+        send_fmt(fd, "(%d results, mode=IVF, nprobe=%d, metric=%s, scanned %zu)", out_count, nprobe, metric_name, scanned);
 }
 
 // cmd_stats: handle STATS
@@ -183,9 +198,7 @@ static void cmd_stats(int fd, const server_config_t *cfg) {
 
     send_fmt(fd, "dimension     : %d",  dim);
     send_fmt(fd, "total vectors : %zu", count);
-    // Show which distance metric the server is using
-    send_fmt(fd, "metric        : %s",
-             cfg->metric == MetricType::COSINE ? "cosine" : "euclidean");
+    send_fmt(fd, "metric        : %s",  cfg->metric == metric_t::COSINE ? "cosine" : "euclidean");
 
     if (g_ivf_index.built) {
         send_fmt(fd, "index built   : yes");
@@ -205,21 +218,16 @@ static void cmd_stats(int fd, const server_config_t *cfg) {
 // cmd_build: handle BUILD
 static void cmd_build(int fd, const server_config_t *cfg) {
     vs_lock(cfg->store);
-
     if (cfg->store->count == 0) {
         vs_unlock(cfg->store);
         send_fmt(fd, "ERR BUILD: no vectors stored");
         return;
     }
-
     send_fmt(fd, "Building IVF index ...");
-    // Pass the active metric so k-means uses the right distance function
-    // and index.metric is set for all future inserts and IVF searches.
-    int rc = ivf_build(*cfg->store, g_ivf_index, cfg->metric);
+    int rc = ivf_build(*cfg->store, g_ivf_index);
     vs_unlock(cfg->store);
 
     if (rc != VS_OK) { send_fmt(fd, "ERR BUILD: k-means failed (rc=%d)", rc); return; }
-
     send_fmt(fd, "vectors   : %zu",  cfg->store->count);
     send_fmt(fd, "clusters  : %d",   g_ivf_index.k);
     send_fmt(fd, "iterations: %d",   g_ivf_index.iterations);
@@ -240,58 +248,23 @@ void handle_client(int fd, const server_config_t *cfg) {
     string line;
 
     while (getline(in, line)) {
-        // strip trailing CR/LF
         size_t len = line.size();
-        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
+        while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r'))
             line[--len] = '\0';
         line.resize(len);
         if (len == 0) continue;
 
         size_t pos = line.find_first_of(" \t");
         string keyword, rest;
-        if (pos == string::npos) {
-            keyword = line;
-            rest = "";
-        } else {
-            keyword = line.substr(0, pos);
-            rest = line.substr(pos + 1);
-        }
+        if (pos == string::npos) { keyword = line; rest = ""; }
+        else { keyword = line.substr(0, pos); rest = line.substr(pos + 1); }
 
-        // dispatch
-        if (keyword == "ADD") {
-            cmd_add(fd, cfg, rest);
-        } else if (keyword == "SEARCH") {
-            cmd_search(fd, cfg, rest);
-        } else if (keyword == "BUILD") {
-            cmd_build(fd, cfg);
-        } else if (keyword == "STATS") {
-            cmd_stats(fd, cfg);
-        } else if (keyword == "SAVE") {
-            vs_lock(cfg->store);
-            int rc = snapshot_save(cfg->store, &g_ivf_index, snapshot_path(cfg));
-            vs_unlock(cfg->store);
-            if (rc == SNAP_OK)
-                send_fmt(fd, "OK saved %zu vectors", cfg->store->count);
-            else
-                send_fmt(fd, "ERR SAVE failed (rc=%d)", rc);
-        } else if (keyword == "LOAD") {
-            vs_lock(cfg->store);
-            int rc = snapshot_load(cfg->store, &g_ivf_index, snapshot_path(cfg));
-            vs_unlock(cfg->store);
-            if (rc == SNAP_OK)
-                send_fmt(fd, "OK loaded %zu vectors", cfg->store->count);
-            else if (rc == SNAP_ERR_IO)
-                send_fmt(fd, "ERR LOAD: file not found or I/O error");
-            else if (rc == SNAP_ERR_MAGIC)
-                send_fmt(fd, "ERR LOAD: bad file format (wrong magic)");
-            else
-                send_fmt(fd, "ERR LOAD failed (rc=%d)", rc);
-        } else if (keyword == "QUIT") {
-            send_fmt(fd, "BYE");
-            break;
-        } else {
-            send_fmt(fd, "ERR unknown command '%s'", keyword.c_str());
-        }
+        if      (keyword == "ADD")    cmd_add(fd, cfg, rest);
+        else if (keyword == "SEARCH") cmd_search(fd, cfg, rest);
+        else if (keyword == "BUILD")  cmd_build(fd, cfg);
+        else if (keyword == "STATS")  cmd_stats(fd, cfg);
+        else if (keyword == "QUIT")   { send_fmt(fd, "BYE"); break; }
+        else                          send_fmt(fd, "ERR unknown command '%s'", keyword.c_str());
     }
 
     filebuf.close();
