@@ -198,10 +198,13 @@ static double ms_between(TP a, TP b)
 
 int main(int argc, char* argv[])
 {
-    if (argc != 3) {
-        std::cerr << "Usage: " << argv[0] << " <host> <port>\n";
+    if (argc < 3 || argc > 4) {
+        std::cerr << "Usage: " << argv[0] << " <host> <port> [output_file]\n";
         return 1;
     }
+
+    // Optional 3rd argument: output file path (default: benchmark/results.txt)
+    std::string output_path = (argc == 4) ? argv[3] : "benchmark/results.txt";
 
     //  Connect 
     int fd = tcp_connect(argv[1], argv[2]);
@@ -417,13 +420,13 @@ int main(int argc, char* argv[])
     std::string table_str = tbl.str();
     std::cout << table_str;
 
-    // Save to benchmark/results.txt
-    std::ofstream outfile("benchmark/results.txt");
+    // Save to the requested output file
+    std::ofstream outfile(output_path);
     if (outfile) {
         outfile << table_str;
-        std::cout << "\nSaved to benchmark/results.txt\n";
+        std::cout << "\nSaved to " << output_path << '\n';
     } else {
-        std::cerr << "Warning: could not open benchmark/results.txt for writing\n";
+        std::cerr << "Warning: could not open " << output_path << " for writing\n";
     }
 
     return 0;
