@@ -31,14 +31,16 @@ vdb: $(SERVER_OBJS)
 %.o: %.cpp
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ $<
 
-# Explicit header dependencies 
+# Explicit header dependencies
 # Tell make when to recompile an object if a header changes.
-server.o:        server.cpp        vdb_interface.h kmeans.h command.h vector_store.h
-command.o:       command.cpp       vdb_interface.h kmeans.h command.h vector_store.h
+# metric.h is the base of the include chain: changing it triggers
+# a rebuild of every module that uses distance functions.
+server.o:        server.cpp        vdb_interface.h metric.h kmeans.h command.h vector_store.h ivf.h
+command.o:       command.cpp       vdb_interface.h metric.h kmeans.h command.h vector_store.h ivf.h
 vector_store.o:  vector_store.cpp  vector_store.h
-search.o:        search.cpp        vdb_interface.h kmeans.h vector_store.h
-kmeans.o:        kmeans.cpp        kmeans.h vector_store.h
-ivf.o:			 ivf.cpp 		   ivf.h vector_store.h kmeans.h
+search.o:        search.cpp        vdb_interface.h metric.h kmeans.h vector_store.h ivf.h
+kmeans.o:        kmeans.cpp        kmeans.h        metric.h vector_store.h
+ivf.o:           ivf.cpp           ivf.h           metric.h vector_store.h kmeans.h
 CLI_SRCS = vdb_cli.cpp
 CLI_OBJS = $(CLI_SRCS:.cpp=.o)
 

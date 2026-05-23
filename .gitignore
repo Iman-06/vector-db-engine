@@ -29,3 +29,6 @@ compile_commands.json
 # Logs/temp
 *.log
 *.tmp
+
+# Report files
+cosine_similarity_report.txt

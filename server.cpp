@@ -56,12 +56,17 @@ server.cpp — TCP server entry point for the Vector DB Engine.
  //usage: print startup syntax and exit with failure.
  static void usage(const char *prog) {
      std::cerr
-         << "Usage: " << prog << " --data <path> --dim <D> --port <P>\n"
+         << "Usage: " << prog << " --data <path> --dim <D> --port <P> [--metric euclidean|cosine]\n"
          << "\n"
-         << "  --data <path>   directory for persistent data (default: " << DEFAULT_DATA << ")\n"
-         << "  --dim  <D>      fixed vector dimension, D > 0  (default: " << DEFAULT_DIM << ")\n"
-         << "  --port <P>      TCP port to listen on, 1-65535 (default: " << DEFAULT_PORT << ")\n";
- 
+         << "  --data   <path>            directory for persistent data   (default: " << DEFAULT_DATA << ")\n"
+         << "  --dim    <D>               fixed vector dimension, D > 0   (default: " << DEFAULT_DIM  << ")\n"
+         << "  --port   <P>               TCP port, 1-65535               (default: " << DEFAULT_PORT << ")\n"
+         << "  --metric euclidean|cosine  distance metric                 (default: euclidean)\n"
+         << "\n"
+         << "  euclidean — squared L2 distance (fast, good for dense numeric vectors)\n"
+         << "  cosine    — 1 - cosine_similarity (good for text/embedding vectors\n"
+         << "              where magnitude doesn't matter, only direction does)\n";
+
      std::exit(EXIT_FAILURE);
  }
  
@@ -69,9 +74,10 @@ server.cpp — TCP server entry point for the Vector DB Engine.
  static void parse_args(int argc, char **argv, server_config_t *cfg)//argc is the number of command-line arguments, argv is an array of strings (the arguments)
  {
      //set defaults
-     cfg->port = DEFAULT_PORT;
-     cfg->dim  = DEFAULT_DIM;
-    cfg->data_path = DEFAULT_DATA;
+     cfg->port   = DEFAULT_PORT;
+     cfg->dim    = DEFAULT_DIM;
+     cfg->data_path = DEFAULT_DATA;
+     cfg->metric = MetricType::EUCLIDEAN;   // default: Euclidean
  
      for (int i = 1; i < argc; i++) {
          std::string arg = argv[i];
@@ -116,6 +122,22 @@ server.cpp — TCP server entry point for the Vector DB Engine.
  
              cfg->port = static_cast<int>(p);
  
+         } else if (arg == "--metric") {
+             if (++i >= argc) {
+                 std::cerr << "error: --metric requires euclidean or cosine\n";
+                 usage(argv[0]);
+             }
+             std::string m = argv[i];
+             if (m == "cosine") {
+                 cfg->metric = MetricType::COSINE;
+             } else if (m == "euclidean") {
+                 cfg->metric = MetricType::EUCLIDEAN;
+             } else {
+                 std::cerr << "error: unknown metric '" << m
+                           << "' (expected euclidean or cosine)\n";
+                 usage(argv[0]);
+             }
+
          } else {
              std::cerr << "error: unknown argument '" << argv[i] << "'\n";
              usage(argv[0]);
@@ -181,7 +203,11 @@ server.cpp — TCP server entry point for the Vector DB Engine.
  
      std::cout
          << "[vdb] Server started\n"
-         << "      port=" << cfg.port << "  dim=" << cfg.dim << "  data=" << cfg.data_path << "\n"
+         << "      port="   << cfg.port
+         << "  dim="        << cfg.dim
+         << "  data="       << cfg.data_path
+         << "  metric="     << (cfg.metric == MetricType::COSINE ? "cosine" : "euclidean")
+         << "\n"
          << "      Waiting for clients…\n";
      std::cout.flush();
  

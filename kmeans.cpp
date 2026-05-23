@@ -12,14 +12,17 @@ static const float* centroid_ptr(const vector<float>& centroids, int cluster, in
     return centroids.data() + static_cast<size_t>(cluster) * static_cast<size_t>(dim);
 }
 
-static int nearest_centroid(const float* vec, const vector<float>& centroids, int k, int dim)
-// Finds the nearest centroid to the given vector.
+static int nearest_centroid(const float* vec, const vector<float>& centroids,
+                            int k, int dim, MetricType metric)
+// Finds the nearest centroid to the given vector using the active metric.
+// compute_distance() dispatches to vdb_dist_sq (Euclidean) or
+// cosine_distance (Cosine) based on the metric flag.
 {
     int best_cluster = 0;
-    double best_dist = vdb_dist_sq(vec, centroid_ptr(centroids, 0, dim), dim);
+    double best_dist = compute_distance(vec, centroid_ptr(centroids, 0, dim), dim, metric);
 
     for (int c = 1; c < k; c++) {
-        double dist = vdb_dist_sq(vec, centroid_ptr(centroids, c, dim), dim);
+        double dist = compute_distance(vec, centroid_ptr(centroids, c, dim), dim, metric);
         if (dist < best_dist) {
             best_dist = dist;
             best_cluster = c;
@@ -58,15 +61,17 @@ static void initialize_centroids(const vector_store_t& store, kmeans_result& out
     }
 }
 
-static bool assign_vectors(const vector_store_t& store, kmeans_result& out)
-// Assigns each vector in the store to the nearest centroid and updates cluster sizes. Returns true if any assignment changed.
+static bool assign_vectors(const vector_store_t& store, kmeans_result& out,
+                           MetricType metric)
+// Assigns each vector in the store to the nearest centroid using `metric`.
+// Returns true if any assignment changed (used for convergence detection).
 {
     bool changed = false;
     fill(out.cluster_sizes.begin(), out.cluster_sizes.end(), 0);
 
     for (size_t i = 0; i < store.count; i++) {
         const float* vec = vs_get_vector(&store, i);
-        int cluster = nearest_centroid(vec, out.centroids, out.k, out.dim);
+        int cluster = nearest_centroid(vec, out.centroids, out.k, out.dim, metric);
 
         if (out.assignments[i] != cluster) {
             out.assignments[i] = cluster;
@@ -119,8 +124,13 @@ static int kmeans_cluster_count(size_t vector_count)
     return (k > 0) ? k : 1;
 }
 
-int kmeans_cluster(const vector_store_t& store, kmeans_result& out, int max_iterations)
-// It initializes centroids, assigns vectors to clusters, and recomputes centroids iteratively until convergence or reaching the maximum number of iterations.
+int kmeans_cluster(const vector_store_t& store, kmeans_result& out,
+                   int max_iterations, MetricType metric)
+// Lloyd's k-means.  Initializes centroids, then iterates:
+//   assign each vector to its nearest centroid (using `metric`)
+//   recompute centroids as the arithmetic mean of assigned vectors
+// Stops when no assignment changes or max_iterations is reached.
+// The centroid recomputation (mean) is metric-independent and unchanged.
 {
     const size_t n = store.count;
     const int dim = store.dim;
@@ -142,7 +152,9 @@ int kmeans_cluster(const vector_store_t& store, kmeans_result& out, int max_iter
     initialize_centroids(store, out);
 
     for (int iter = 0; iter < max_iterations; iter++) {
-        bool changed = assign_vectors(store, out);
+        // Assignment step: uses compute_distance(metric) internally
+        bool changed = assign_vectors(store, out, metric);
+        // Update step: arithmetic mean — same formula regardless of metric
         recompute_centroids(store, out);
         out.iterations = iter + 1;
 

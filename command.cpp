@@ -125,7 +125,7 @@ static void cmd_search(int fd, const server_config_t* cfg, string rest) {
     int rc;
 
     if (mode == search_mode_t::SEARCH_MODE_BRUTE) {
-        rc = search_brute(*cfg->store, query, (int)k, results, out_count);
+        rc = search_brute(*cfg->store, query, (int)k, results, out_count, cfg->metric);
         scanned = cfg->store->count;
     } else {
         if (!g_ivf_index.built) {
@@ -183,6 +183,9 @@ static void cmd_stats(int fd, const server_config_t *cfg) {
 
     send_fmt(fd, "dimension     : %d",  dim);
     send_fmt(fd, "total vectors : %zu", count);
+    // Show which distance metric the server is using
+    send_fmt(fd, "metric        : %s",
+             cfg->metric == MetricType::COSINE ? "cosine" : "euclidean");
 
     if (g_ivf_index.built) {
         send_fmt(fd, "index built   : yes");
@@ -210,7 +213,9 @@ static void cmd_build(int fd, const server_config_t *cfg) {
     }
 
     send_fmt(fd, "Building IVF index ...");
-    int rc = ivf_build(*cfg->store, g_ivf_index);
+    // Pass the active metric so k-means uses the right distance function
+    // and index.metric is set for all future inserts and IVF searches.
+    int rc = ivf_build(*cfg->store, g_ivf_index, cfg->metric);
     vs_unlock(cfg->store);
 
     if (rc != VS_OK) { send_fmt(fd, "ERR BUILD: k-means failed (rc=%d)", rc); return; }
