@@ -9,7 +9,7 @@
 #include "vector_store.h"
 #include "kmeans.h"
 #include "ivf.h"
-#include "metric.h"      // Member 1's metric — MetricType, vdb_dist_sq, cosine_distance, compute_distance
+#include "metric.h" 
 
 extern ivf_index_t g_ivf_index;
 using namespace std;

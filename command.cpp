@@ -54,9 +54,7 @@ static void cmd_add(int fd, const server_config_t *cfg, string rest) {
         if (*endp != '\0') { send_fmt(fd, "ERR ADD: bad float '%s' at component %d", tok.c_str(), i); return; }
     }
     if (ss >> tok) { send_fmt(fd, "ERR ADD: too many values (server dim = %d)", dim); return; }
-
-    // ── Member 2: normalize if cosine metric is selected ──────────────────
-    if (cfg->metric == metric_t::COSINE) {
+    if (cfg->metric == MetricType::COSINE) {
         int nrc = normalize_vec(vec);
         if (nrc == NORM_ERR_ZERO) {
             send_fmt(fd, "ERR ADD: zero vector cannot be normalized for cosine metric");
@@ -93,9 +91,7 @@ static void cmd_search(int fd, const server_config_t* cfg, string rest) {
         query[i] = strtof(tok.c_str(), &endp);
         if (*endp != '\0') { send_fmt(fd, "ERR SEARCH: bad float '%s' at component %d", tok.c_str(), i); return; }
     }
-
-    // ── Member 2: normalize query vector if cosine metric ─────────────────
-    if (cfg->metric == metric_t::COSINE) {
+    if (cfg->metric == MetricType::COSINE) {
         int nrc = normalize_vec(query);
         if (nrc == NORM_ERR_ZERO) {
             send_fmt(fd, "ERR SEARCH: zero query vector cannot be used with cosine metric");
@@ -165,7 +161,7 @@ static void cmd_search(int fd, const server_config_t* cfg, string rest) {
         return;
     }
 
-    const char* metric_name = (cfg->metric == metric_t::COSINE) ? "cosine" : "euclidean";
+    const char* metric_name = (cfg->metric == MetricType::COSINE) ? "cosine" : "euclidean";
 
     for (int i = 0; i < out_count; i++) {
         ostringstream line;
@@ -198,7 +194,7 @@ static void cmd_stats(int fd, const server_config_t *cfg) {
 
     send_fmt(fd, "dimension     : %d",  dim);
     send_fmt(fd, "total vectors : %zu", count);
-    send_fmt(fd, "metric        : %s",  cfg->metric == metric_t::COSINE ? "cosine" : "euclidean");
+    send_fmt(fd, "metric        : %s",  cfg->metric == MetricType::COSINE ? "cosine" : "euclidean");
 
     if (g_ivf_index.built) {
         send_fmt(fd, "index built   : yes");
