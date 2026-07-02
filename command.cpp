@@ -13,6 +13,7 @@
 #include <cstring>
 #include <cstdarg>
 #include <cstdio>
+#include <cmath>
 #include <cstdlib>
 #include <unistd.h>
 #include <errno.h>
@@ -24,6 +25,7 @@ ivf_index_t g_ivf_index;
 
 #define MAX_LINE  8192
 #define MAX_K     10000
+
 
 static void send_fmt(int fd, const char *fmt, ...) {
     char buf[MAX_LINE + 4];
@@ -41,7 +43,16 @@ static void cmd_add(int fd, const server_config_t *cfg, string rest) {
     const int dim = cfg->dim;
     string tok;
     char *endp;
-    stringstream ss(rest);
+    //stringstream ss(rest);
+    string cleaned = rest;
+
+for(char& c : cleaned)
+{
+    if(c=='[' || c==']' || c==',')
+        c=' ';
+}
+
+stringstream ss(cleaned);
 
     if (!(ss >> tok)) { send_fmt(fd, "ERR ADD: missing id"); return; }
     int64_t id = strtoll(tok.c_str(), &endp, 10);
@@ -61,7 +72,7 @@ static void cmd_add(int fd, const server_config_t *cfg, string rest) {
             return;
         }
     }
-
+    
     int rc = vs_add(cfg->store, id, vec.data());
     if (rc == VS_OK && g_ivf_index.built) {
         vs_lock(cfg->store);
@@ -82,7 +93,16 @@ static void cmd_search(int fd, const server_config_t* cfg, string rest) {
     const int dim = cfg->dim;
     string tok;
     char* endp;
-    stringstream ss(rest);
+    //stringstream ss(rest);
+    string cleaned = rest;
+
+for(char& c : cleaned)
+{
+    if(c=='[' || c==']' || c==',')
+        c=' ';
+}
+
+stringstream ss(cleaned);
 
     // parse query vector
     vector<float> query((size_t)dim);
@@ -169,12 +189,33 @@ static void cmd_search(int fd, const server_config_t* cfg, string rest) {
         line.precision(6);
         line << (long long)results[i].id << " " << results[i].distance;
         if (!snap.empty()) {
-            const float* v = snap.data() + (size_t)i * (size_t)dim;
-            for (int j = 0; j < dim; j++) {
-                if ((int)line.str().size() >= MAX_LINE - 16) break;
-                line << " " << v[j];
-            }
+            // const float* v = snap.data() + (size_t)i * (size_t)dim;
+            // for (int j = 0; j < dim; j++) {
+            //     if ((int)line.str().size() >= MAX_LINE - 16) break;
+            //     line << " " << v[j];
+            // }
+    const float* v = snap.data() + (size_t)i * (size_t)dim;
+
+    int side = (int)std::sqrt(dim);
+
+    line << " [[";
+
+    for (int r = 0; r < side; r++) {
+
+        if (r > 0)
+            line << "][";
+
+        for (int c = 0; c < side; c++) {
+
+            if (c > 0)
+                line << " ";
+
+            line << v[r * side + c];
         }
+    }
+
+    line << "]]";
+}
         string out = line.str() + "\n";
         write(fd, out.c_str(), out.size());
     }
@@ -220,7 +261,7 @@ static void cmd_build(int fd, const server_config_t *cfg) {
         return;
     }
     send_fmt(fd, "Building IVF index ...");
-    int rc = ivf_build(*cfg->store, g_ivf_index);
+    int rc = ivf_build(*cfg->store, g_ivf_index, cfg->metric);
     vs_unlock(cfg->store);
 
     if (rc != VS_OK) { send_fmt(fd, "ERR BUILD: k-means failed (rc=%d)", rc); return; }

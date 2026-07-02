@@ -26,7 +26,7 @@ using hashmap_t = hashmap;
 struct vector_store {
     int      dim;
     //arrays for storage
-    float* vectors;
+    float *vectors;
     int64_t* ids;
     size_t   count;
     size_t   capacity;

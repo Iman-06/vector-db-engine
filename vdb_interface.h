@@ -11,10 +11,10 @@
 #include "ivf.h"
 #include "metric.h" 
 
-extern ivf_index_t g_ivf_index;
+extern ivf_index_t g_ivf_index; 
 using namespace std;
 
-// Keep metric_t as an alias for MetricType so Member 2's code compiles unchanged
+// Keep metric_t as an alias for MetricType
 using metric_t = MetricType;
 
 // Keep vdb_dist as an alias for compute_distance
